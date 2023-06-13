@@ -1,0 +1,4 @@
+(fp_lib_table
+  (version 7)
+  (lib (name "Department of Alchemy")(type "KiCad")(uri "C:/Users/jesse/dev/DepartmentOfAlchemy/doa-kicad-library/6-footprint-library/doa-footprint-library.pretty")(options "")(descr ""))
+)
