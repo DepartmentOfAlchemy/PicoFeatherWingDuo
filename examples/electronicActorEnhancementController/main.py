@@ -22,9 +22,9 @@ TESTING = True
 
 CONFIG_FILE = "/sd/config.toml"
 AMBIENT_FILE = "/sd/000.wav"
-TRIGGER_FILE = "/sd/001.wav"
+TRIGGERED_FILE = "/sd/001.wav"
 
-TRIGGER_DURATION = 5.0
+TRIGGERED_DURATION = 5.0 # default triggered duration
 
 # Pins
 INPUT_PIN = board.GP17    # standard MiniSSO
@@ -38,9 +38,11 @@ SPI_MOSI_PIN = board.GP15
 SPI_MISO_PIN = board.GP8
 SD_DETECT_PIN = board.GP7
 SD_CS_PIN = board.GP11
+ONBOARD_LED_PIN = board.GP25
 
 NANOSECONDS_PER_SECOND = 1000000000
-config = {}
+
+onboard_led = pwmio.PWMOut(ONBOARD_LED_PIN)
 
 # MiniSSO pins
 trigger_io = digitalio.DigitalInOut(INPUT_PIN)
@@ -55,34 +57,37 @@ output2 = pwmio.PWMOut(OUTPUT2_PIN, frequency=1400)
 detect = digitalio.DigitalInOut(SD_DETECT_PIN)
 detect.direction = digitalio.Direction.INPUT
 
-#if not detect.value:
-#    print("SD Card not detected")
-#    while True:
-#        pass
+sdcard_exists = False
+if detect.value:
+    print("SD Card detected")
+    sdcard_exists = True
+else:
+    print("SD Card not detected")
+    onboard_led.duty_cycle = 0xFFFF
 
 i2s = audiobusio.I2SOut(I2S_BIT_CLOCK_PIN, I2S_WORD_SELECT_PIN, I2S_DATA_PIN)
 
-spi = busio.SPI(clock=SPI_CLOCK_PIN, MOSI=SPI_MOSI_PIN, MISO=SPI_MISO_PIN)
-
-sdcard = sdcardio.SDCard(spi, SD_CS_PIN)
-vfs = storage.VfsFat(sdcard)
-storage.mount(vfs, "/sd")
-
 ambient_audio_exists = False
-try:
-    status = os.stat(AMBIENT_FILE)
-    ambient_audio_exists = True
-except OSError:
-    pass
+triggered_audio_exists = False
 
-trigger_audio_exists = False
-try:
-    status = os.stat(TRIGGER_FILE)
-    trigger_audio_exists = True
-except OSError as err:
-    print('Required trigger audio not found:', err)
-    while True:
+if sdcard_exists:
+    spi = busio.SPI(clock=SPI_CLOCK_PIN, MOSI=SPI_MOSI_PIN, MISO=SPI_MISO_PIN)
+
+    sdcard = sdcardio.SDCard(spi, SD_CS_PIN)
+    vfs = storage.VfsFat(sdcard)
+    storage.mount(vfs, "/sd")
+
+    try:
+        status = os.stat(AMBIENT_FILE)
+        ambient_audio_exists = True
+    except OSError:
         pass
+
+    try:
+        status = os.stat(TRIGGERED_FILE)
+        triggered_audio_exists = True
+    except OSError as err:
+        print('Triggered audio not found:', err)
 
 time.sleep(3) # delay a bit for logging
 
@@ -103,6 +108,32 @@ def upscale(x):
     values used by Raspberry Pi Pico PWM.
     """
     return (x << 8) + x
+
+def fatal(msg):
+    """Unrecoverable error. Write message to
+    SD Card if available along with to serial port.
+
+    Blink the onboard LED.
+    """
+
+    print(msg)
+
+    if sdcard_exists:
+        # write to error.txt
+        with open("/sd/error.tx", "w") as errorFile:
+            errorFile.write('{0}\n'.format(msg))
+            errorFile.flush()
+
+    toggle = True
+    while True:
+        if toggle:
+            onboard_led.duty_cycle(0xFFFF)
+        else:
+            onboard_led.duty_cycle(0)
+
+        toggle = not toggle
+        time.sleep(0.5)
+
 
 ############################################################
 # Effects
@@ -405,20 +436,21 @@ class TriggeredState(State):
 
     def __init__(self):
         super().__init__()
-        self.trigger_finish_time = 0
+        self.triggered_finish_time = 0
 
     @property
     def name(self):
         return 'triggered'
     
     def enter(self, machine):
-        self.i2s.play(self.wave, loop=False)
+        if self.wave != None:
+            self.i2s.play(self.wave, loop=False)
 
         State.enter(self, machine)
         for effect in self.effects:
             effect.enter()
         now = time.monotonic()
-        self.trigger_finish_time = now + TRIGGER_DURATION
+        self.triggered_finish_time = now + TRIGGERED_DURATION
 
     def exit(self, machine):
         State.exit(self, machine)
@@ -426,20 +458,22 @@ class TriggeredState(State):
             effect.exit()
 
     def update(self, machine):
-        # triggered length based on audio length
-        if not self.i2s.playing:
-            machine.go_to_state('ambient')
-            return
+        if self.wave != None:
+            # triggered length based on audio length
+            if not self.i2s.playing:
+                machine.go_to_state('ambient')
+                return
+        else:
+            # timed trigger versus trigger based on triggered audio length
+            now = time.monotonic()
+            if now >= self.triggered_finish_time:
+                machine.go_to_state('ambient')
+                return
 
         if State.update(self, machine):
             now = time.monotonic_ns()
             for effect in self.effects:
                 effect.update(now=now)
-        
-        # timed trigger versus trigger based on triggered audio length
-        #now = time.monotonic()
-        #if now >= self.trigger_finish_time:
-        #    machine.go_to_state('ambient')
 
 ###########################################################
 
@@ -471,30 +505,36 @@ if ambient_audio_exists:
     ambient_state.set_i2s(i2s)
     ambient_state.set_wave(ambient_wav)
 
-try:
+if sdcard_exists:
+    try:
+        output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
+        output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x6c4a}
+        subtable = 'ambient'
+        keys = cptoml.keys(subtable, toml=CONFIG_FILE)
+        for key in keys:
+            if key == 'effect1':
+                output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.dim':
+                output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.strobe':
+                output1_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.seed':
+                output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2':
+                output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.dim':
+                output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.strobe':
+                output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.seed':
+                output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+    except OSError as err:
+        print("Application configuration not found:", err)
+        fatal(err)
+else:
+    # default ambient scene
     output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
-    output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
-    subtable = 'ambient'
-    keys = cptoml.keys(subtable, toml=CONFIG_FILE)
-    for key in keys:
-        if key == 'effect1':
-            output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.dim':
-            output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.strobe':
-            output1_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.seed':
-            output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2':
-            output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.dim':
-            output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.strobe':
-            output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.seed':
-            output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-except OSError as err:
-    print("Application configuration not found:", err)
+    output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x6c4a}
 
 if output1_config['effect'] == 'dimmer':
     effect = Dimmer(output1)
@@ -519,35 +559,41 @@ elif output2_config['effect'] == 'flicker':
 state_machine.add_state(ambient_state)
 
 triggered_state = TriggeredState()
-trigger_buffer = bytearray(1024)
-trigger_wav = audiocore.WaveFile(TRIGGER_FILE, trigger_buffer)
-triggered_state.set_i2s(i2s)
-triggered_state.set_wave(trigger_wav)
+if triggered_audio_exists:
+    trigger_buffer = bytearray(1024)
+    trigger_wav = audiocore.WaveFile(TRIGGERED_FILE, trigger_buffer)
+    triggered_state.set_i2s(i2s)
+    triggered_state.set_wave(trigger_wav)
 
-try:
-    output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
-    output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x6c4a}
-    subtable = 'triggered'
-    keys = cptoml.keys(subtable, toml=CONFIG_FILE)
-    for key in keys:
-        if key == 'effect1':
-            output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.dim':
-            output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.strobe':
-            output1_confic['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect1.seed':
-            output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2':
-            output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.dim':
-            output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.strobe':
-            output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-        elif key == 'effect2.seed':
-            output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
-except OSError as err:
-    print("Application configuration not found:", err)
+if sdcard_exists:
+    try:
+        output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
+        output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x6c4a}
+        subtable = 'triggered'
+        keys = cptoml.keys(subtable, toml=CONFIG_FILE)
+        for key in keys:
+            if key == 'effect1':
+                output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.dim':
+                output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.strobe':
+                output1_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect1.seed':
+                output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2':
+                output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.dim':
+                output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.strobe':
+                output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+            elif key == 'effect2.seed':
+                output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+    except OSError as err:
+        print("Application configuration not found:", err)
+        fatal(err)
+else:
+    output1_config = {'effect': 'dimmer', 'dim': 255, 'strobe': 0, 'seed': 0x55ce}
+    output2_config = {'effect': 'dimmer', 'dim': 255, 'strobe': 10, 'seed': 0x6c4a}
 
 if output1_config['effect'] == 'dimmer':
     effect = Dimmer(output1)
@@ -583,7 +629,7 @@ state_machine.add_state(triggered_state)
 
 #triggered_state = TriggeredState()
 #trigger_buffer = bytearray(1024)
-#trigger_wav = audiocore.WaveFile(TRIGGER_FILE, trigger_buffer)
+#trigger_wav = audiocore.WaveFile(TRIGGERED_FILE, trigger_buffer)
 #triggered_state.set_i2s(i2s)
 #triggered_state.set_wave(trigger_wav)
 
