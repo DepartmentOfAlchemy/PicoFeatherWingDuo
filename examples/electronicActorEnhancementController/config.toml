@@ -1,0 +1,18 @@
+[ambient]
+#effect1 = "dimmer"
+#effect1.dim = 255
+effect1 = "flicker"
+effect1.seed = 0x6c4a
+effect1.dim = 5
+
+effect2 = "flicker"
+effect2.seed = 0x55ce
+effect2.dim = 3
+
+[triggered]
+effect1 = "dimmer"
+effect1.dim = 0
+
+effect2 = "dimmer"
+effect2.dim = 255
+effect2.strobe = 10

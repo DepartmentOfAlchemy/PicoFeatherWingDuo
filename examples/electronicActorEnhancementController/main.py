@@ -40,7 +40,7 @@ SD_DETECT_PIN = board.GP7
 SD_CS_PIN = board.GP11
 
 NANOSECONDS_PER_SECOND = 1000000000
-strobeFrequency = 7
+config = {}
 
 # MiniSSO pins
 trigger_io = digitalio.DigitalInOut(INPUT_PIN)
@@ -83,11 +83,6 @@ except OSError as err:
     print('Required trigger audio not found:', err)
     while True:
         pass
-
-try:
-    strobeFrequency = cptoml.fetch("frequency", "strobe", toml=CONFIG_FILE)
-except OSError as err:
-    print("Application configuration not found:", err)
 
 time.sleep(3) # delay a bit for logging
 
@@ -476,13 +471,50 @@ if ambient_audio_exists:
     ambient_state.set_i2s(i2s)
     ambient_state.set_wave(ambient_wav)
 
-dimmer = Dimmer(output1)
-dimmer.dim = 255
-ambient_state.add_effect(dimmer)
+try:
+    output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
+    output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
+    subtable = 'ambient'
+    keys = cptoml.keys(subtable, toml=CONFIG_FILE)
+    for key in keys:
+        if key == 'effect1':
+            output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.dim':
+            output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.strobe':
+            output1_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.seed':
+            output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2':
+            output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.dim':
+            output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.strobe':
+            output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.seed':
+            output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+except OSError as err:
+    print("Application configuration not found:", err)
 
-flicker = Flicker(output2, 0x55ce)
-flicker.dim = 3
-ambient_state.add_effect(flicker)
+if output1_config['effect'] == 'dimmer':
+    effect = Dimmer(output1)
+    effect.dim = output1_config['dim']
+    effect.strobe = output1_config['strobe']
+    ambient_state.add_effect(effect)
+elif output1_config['effect'] == 'flicker':
+    effect = Flicker(output1, output1_config['seed'])
+    effect.dim = output1_config['dim']
+    ambient_state.add_effect(effect)
+
+if output2_config['effect'] == 'dimmer':
+    effect = Dimmer(output2)
+    effect.dim = output2_config['dim']
+    effect.strobe = output2_config['strobe']
+    ambient_state.add_effect(effect)
+elif output2_config['effect'] == 'flicker':
+    effect = Flicker(output2, output2_config['seed'])
+    effect.dim = output2_config['dim']
+    ambient_state.add_effect(effect)
 
 state_machine.add_state(ambient_state)
 
@@ -492,32 +524,94 @@ trigger_wav = audiocore.WaveFile(TRIGGER_FILE, trigger_buffer)
 triggered_state.set_i2s(i2s)
 triggered_state.set_wave(trigger_wav)
 
-dimmer = Dimmer(output1)
-dimmer.dim = 0
-dimmer.strobe = 1
-triggered_state.add_effect(dimmer)
+try:
+    output1_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x55ce}
+    output2_config = {'effect': 'dimmer', 'dim': 0, 'strobe': 0, 'seed': 0x6c4a}
+    subtable = 'triggered'
+    keys = cptoml.keys(subtable, toml=CONFIG_FILE)
+    for key in keys:
+        if key == 'effect1':
+            output1_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.dim':
+            output1_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.strobe':
+            output1_confic['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect1.seed':
+            output1_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2':
+            output2_config['effect'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.dim':
+            output2_config['dim'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.strobe':
+            output2_config['strobe'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+        elif key == 'effect2.seed':
+            output2_config['seed'] = cptoml.fetch(key, subtable, toml=CONFIG_FILE)
+except OSError as err:
+    print("Application configuration not found:", err)
 
-dimmer = Dimmer(output2)
-dimmer.dim = 255
-dimmer.strobe = 10
-triggered_state.add_effect(dimmer)
+if output1_config['effect'] == 'dimmer':
+    effect = Dimmer(output1)
+    effect.dim = output1_config['dim']
+    effect.strobe = output1_config['strobe']
+    triggered_state.add_effect(effect)
+elif output1_config['effect'] == 'flicker':
+    effect = Flicker(output1, output1_config['seed'])
+    effect.dim = output1_config['dim']
+    triggered_state.add_effect(effect)
+
+if output2_config['effect'] == 'dimmer':
+    effect = Dimmer(output2)
+    effect.dim = output2_config['dim']
+    effect.strobe = output2_config['strobe']
+    triggered_state.add_effect(effect)
+elif output2_config['effect'] == 'flicker':
+    effect = Flicker(output2, output2_config['seed'])
+    effect.dim = output2_config['dim']
+    triggered_state.add_effect(effect)
 
 state_machine.add_state(triggered_state)
+
+#dimmer = Dimmer(output1)
+#dimmer.dim = 255
+#ambient_state.add_effect(dimmer)
+
+#flicker = Flicker(output2, 0x55ce)
+#flicker.dim = 3
+#ambient_state.add_effect(flicker)
+
+#state_machine.add_state(ambient_state)
+
+#triggered_state = TriggeredState()
+#trigger_buffer = bytearray(1024)
+#trigger_wav = audiocore.WaveFile(TRIGGER_FILE, trigger_buffer)
+#triggered_state.set_i2s(i2s)
+#triggered_state.set_wave(trigger_wav)
+
+#dimmer = Dimmer(output1)
+#dimmer.dim = 0
+#dimmer.strobe = 1
+#triggered_state.add_effect(dimmer)
+
+#dimmer = Dimmer(output2)
+#dimmer.dim = 255
+#dimmer.strobe = 10
+#triggered_state.add_effect(dimmer)
+
+#state_machine.add_state(triggered_state)
 
 state_machine.go_to_state('ambient')
 
 print()
 print("Electronic Actor Enhancement Controller")
 print("Settings from config file: {0}".format(CONFIG_FILE))
-print("Strobe frequency: {0:d}".format(strobeFrequency))
 
-print('Upscale testing')
-x = 0x02
-r = upscale(x)
-print('Upscale {0:x}: {1:x}'.format(x, r))
-x = 0xff
-r = upscale(x)
-print('Upscale {0:x}: {1:x}'.format(x, r))
+#print('Upscale testing')
+#x = 0x02
+#r = upscale(x)
+#print('Upscale {0:x}: {1:x}'.format(x, r))
+#x = 0xff
+#r = upscale(x)
+#print('Upscale {0:x}: {1:x}'.format(x, r))
 
 while True:
     trigger.update()
